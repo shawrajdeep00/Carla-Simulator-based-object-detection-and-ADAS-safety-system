@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+bags/
+!bags/.gitkeep
+.env
+# Logs
+*.log
+.claude

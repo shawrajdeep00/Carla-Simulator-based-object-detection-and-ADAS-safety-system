@@ -1,0 +1,12 @@
+# Ensure shell scripts always have Unix line endings (LF) regardless of OS.
+# Without this, Windows git checkouts produce CRLF files that break inside
+# Linux Docker containers (bash sees \r as a character and fails).
+*.sh    text eol=lf
+
+# Common text files — normalise to LF in the repo, checkout as-is.
+*.py    text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.txt   text eol=lf
+*.env   text eol=lf
