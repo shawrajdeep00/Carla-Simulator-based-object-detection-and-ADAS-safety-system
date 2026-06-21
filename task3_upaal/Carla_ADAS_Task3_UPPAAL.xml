@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC "-//Uppaal Team//DTD Flat System 1.6//EN" "http://www.it.uu.se/research/group/darts/uppaal/flat-1_6.dtd">
+<nta><declaration>// CARLA ADAS Task 3 model. Time unit: milliseconds.
+const int FRAME_PERIOD = 67;          // approximately 15 camera frames per second
+const int PROCESS_MIN = 5;
+const int PROCESS_MAX = 60;
+const int RESPONSE_DEADLINE = 100;
+
+const int PED_CONF_THRESHOLD = 70;    // my_adas.py: 0.70
+const int VEH_CONF_THRESHOLD = 50;    // my_adas.py: 0.50
+const int TL_CONF_THRESHOLD = 75;     // my_adas.py: 0.75
+
+const int SC_NONE = 0;
+const int SC_PEDESTRIAN = 1;
+const int SC_RED_FAST = 2;
+const int SC_RED_SLOW = 3;
+const int SC_YELLOW_FAST = 4;
+const int SC_YELLOW_SLOW = 5;
+const int SC_GREEN = 6;
+const int SC_CLOSE_VEHICLE = 7;
+const int SC_FAR_VEHICLE = 8;
+const int SC_LOW_CONFIDENCE = 9;
+
+const int TL_UNKNOWN = 0;
+const int TL_RED = 1;
+const int TL_YELLOW = 2;
+const int TL_GREEN = 3;
+
+broadcast chan frame;
+broadcast chan start_object, start_traffic;
+broadcast chan object_done, traffic_done, perception_ready;
+broadcast chan emergency_cmd, controlled_cmd, notification_cmd, manual_cmd;
+
+int[0,9] scenario = SC_NONE;
+int[0,100] obj_conf = 0;
+int[0,100] tl_conf = 0;
+int[0,120] speed_kmh = 0;
+
+bool pedestrian_valid = false;
+bool vehicle_valid = false;
+bool vehicle_close = false;
+int[0,3] traffic_state = TL_UNKNOWN;
+
+int[0,100] requested_brake = 0;
+int[0,9] command_scenario = SC_NONE;
+int[0,100] throttle = 0;
+int[0,100] brake = 0;
+int[-100,100] steer = 0;
+bool alert_active = false;
+bool warning_active = false;
+bool notification_active = false;
+
+void configure_scenario(int s)
+{
+    scenario = s;
+    obj_conf = 0;
+    tl_conf = 0;
+    speed_kmh = 30;
+    vehicle_close = false;
+
+    if (s == SC_PEDESTRIAN) obj_conf = 85;
+    if (s == SC_RED_FAST) { tl_conf = 85; speed_kmh = 40; }
+    if (s == SC_RED_SLOW) { tl_conf = 85; speed_kmh = 10; }
+    if (s == SC_YELLOW_FAST) { tl_conf = 85; speed_kmh = 30; }
+    if (s == SC_YELLOW_SLOW) { tl_conf = 85; speed_kmh = 5; }
+    if (s == SC_GREEN) { tl_conf = 85; speed_kmh = 20; }
+    if (s == SC_CLOSE_VEHICLE) {
+        obj_conf = 80; speed_kmh = 40; vehicle_close = true;
+    }
+    if (s == SC_FAR_VEHICLE) { obj_conf = 80; speed_kmh = 40; }
+    if (s == SC_LOW_CONFIDENCE) { obj_conf = 65; tl_conf = 70; }
+}
+
+void reset_perception()
+{
+    pedestrian_valid = false;
+    vehicle_valid = false;
+    traffic_state = TL_UNKNOWN;
+}
+
+void apply_emergency()
+{
+    command_scenario = scenario;
+    throttle = 0; brake = 100; steer = 0;
+    alert_active = true;
+    warning_active = false;
+    notification_active = false;
+}
+
+void apply_controlled()
+{
+    command_scenario = scenario;
+    throttle = 0; brake = requested_brake; steer = 0;
+    alert_active = requested_brake &gt;= 60;
+    warning_active = requested_brake &lt; 60;
+    notification_active = false;
+}
+
+void apply_notification()
+{
+    command_scenario = scenario;
+    throttle = 0; brake = 0; steer = 0;
+    alert_active = false;
+    warning_active = false;
+    notification_active = true;
+}
+
+void apply_manual()
+{
+    command_scenario = scenario;
+    throttle = 0; brake = 0; steer = 0;
+    alert_active = false;
+    warning_active = false;
+    notification_active = false;
+}
+
+bool valid_pedestrian()
+{
+    return scenario == SC_PEDESTRIAN &amp;&amp; obj_conf &gt;= PED_CONF_THRESHOLD;
+}
+
+bool valid_vehicle()
+{
+    return (scenario == SC_CLOSE_VEHICLE || scenario == SC_FAR_VEHICLE)
+        &amp;&amp; obj_conf &gt;= VEH_CONF_THRESHOLD;
+}
+
+bool valid_red_light()
+{
+    return (scenario == SC_RED_FAST || scenario == SC_RED_SLOW)
+        &amp;&amp; tl_conf &gt;= TL_CONF_THRESHOLD;
+}
+
+bool valid_yellow_light()
+{
+    return (scenario == SC_YELLOW_FAST || scenario == SC_YELLOW_SLOW)
+        &amp;&amp; tl_conf &gt;= TL_CONF_THRESHOLD;
+}
+
+bool valid_green_light()
+{
+    return scenario == SC_GREEN &amp;&amp; tl_conf &gt;= TL_CONF_THRESHOLD;
+}
+
+bool need_emergency()
+{
+    return pedestrian_valid;
+}
+
+bool need_red_brake()
+{
+    return !pedestrian_valid &amp;&amp; traffic_state == TL_RED;
+}
+
+bool need_yellow_brake()
+{
+    return !pedestrian_valid &amp;&amp; traffic_state == TL_YELLOW &amp;&amp; speed_kmh &gt; 10;
+}
+
+bool need_vehicle_brake()
+{
+    return !pedestrian_valid
+        &amp;&amp; traffic_state != TL_RED
+        &amp;&amp; !(traffic_state == TL_YELLOW &amp;&amp; speed_kmh &gt; 10)
+        &amp;&amp; vehicle_valid &amp;&amp; vehicle_close &amp;&amp; speed_kmh &gt; 20;
+}
+
+bool need_controlled()
+{
+    return need_red_brake() || need_yellow_brake() || need_vehicle_brake();
+}
+
+bool need_notification()
+{
+    return !need_emergency() &amp;&amp; !need_red_brake()
+        &amp;&amp; !need_yellow_brake() &amp;&amp; !need_vehicle_brake()
+        &amp;&amp; traffic_state == TL_GREEN;
+}
+
+bool need_manual()
+{
+    return !need_emergency() &amp;&amp; !need_red_brake()
+        &amp;&amp; !need_yellow_brake() &amp;&amp; !need_vehicle_brake()
+        &amp;&amp; !need_notification();
+}</declaration><template><name>ScenarioGenerator</name><declaration>clock frame_t;</declaration><location id="sg_wait" x="-650" y="0"><name x="-675" y="-30">WaitNextFrame</name><label kind="invariant" x="-680" y="15">frame_t &lt;= FRAME_PERIOD</label></location><location id="sg_none" x="0" y="-720"><name x="-25" y="-750">NoHazard</name><committed /></location><location id="sg_ped" x="0" y="-560"><name x="-25" y="-590">Pedestrian</name><committed /></location><location id="sg_red_fast" x="0" y="-400"><name x="-25" y="-430">RedFast</name><committed /></location><location id="sg_red_slow" x="0" y="-240"><name x="-25" y="-270">RedSlow</name><committed /></location><location id="sg_yellow_fast" x="0" y="-80"><name x="-25" y="-110">YellowFast</name><committed /></location><location id="sg_yellow_slow" x="0" y="80"><name x="-25" y="50">YellowSlow</name><committed /></location><location id="sg_green" x="0" y="240"><name x="-25" y="210">Green</name><committed /></location><location id="sg_close_vehicle" x="0" y="400"><name x="-25" y="370">CloseVehicle</name><committed /></location><location id="sg_far_vehicle" x="0" y="560"><name x="-25" y="530">FarVehicle</name><committed /></location><location id="sg_low_conf" x="0" y="720"><name x="-25" y="690">LowConfidence</name><committed /></location><init ref="sg_wait" /><transition><source ref="sg_wait" /><target ref="sg_none" /><label kind="guard" x="-600" y="-791">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-600" y="-755">configure_scenario(SC_NONE)</label><nail x="-330" y="-720" /></transition><transition><source ref="sg_none" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="-678">frame!</label><label kind="assignment" x="-310" y="-660">frame_t = 0</label><nail x="-180" y="-665" /><nail x="-500" y="-665" /></transition><transition><source ref="sg_wait" /><target ref="sg_ped" /><label kind="guard" x="-440" y="-631">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-440" y="-595">configure_scenario(SC_PEDESTRIAN)</label><nail x="-330" y="-560" /></transition><transition><source ref="sg_ped" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="-518">frame!</label><label kind="assignment" x="-310" y="-500">frame_t = 0</label><nail x="-180" y="-505" /><nail x="-500" y="-505" /></transition><transition><source ref="sg_wait" /><target ref="sg_red_fast" /><label kind="guard" x="-600" y="-471">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-600" y="-435">configure_scenario(SC_RED_FAST)</label><nail x="-330" y="-400" /></transition><transition><source ref="sg_red_fast" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="-358">frame!</label><label kind="assignment" x="-310" y="-340">frame_t = 0</label><nail x="-180" y="-345" /><nail x="-500" y="-345" /></transition><transition><source ref="sg_wait" /><target ref="sg_red_slow" /><label kind="guard" x="-440" y="-311">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-440" y="-275">configure_scenario(SC_RED_SLOW)</label><nail x="-330" y="-240" /></transition><transition><source ref="sg_red_slow" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="-198">frame!</label><label kind="assignment" x="-310" y="-180">frame_t = 0</label><nail x="-180" y="-185" /><nail x="-500" y="-185" /></transition><transition><source ref="sg_wait" /><target ref="sg_yellow_fast" /><label kind="guard" x="-600" y="-151">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-600" y="-115">configure_scenario(SC_YELLOW_FAST)</label><nail x="-330" y="-80" /></transition><transition><source ref="sg_yellow_fast" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="-38">frame!</label><label kind="assignment" x="-310" y="-20">frame_t = 0</label><nail x="-180" y="-25" /><nail x="-500" y="-25" /></transition><transition><source ref="sg_wait" /><target ref="sg_yellow_slow" /><label kind="guard" x="-440" y="9">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-440" y="45">configure_scenario(SC_YELLOW_SLOW)</label><nail x="-330" y="80" /></transition><transition><source ref="sg_yellow_slow" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="122">frame!</label><label kind="assignment" x="-310" y="140">frame_t = 0</label><nail x="-180" y="135" /><nail x="-500" y="135" /></transition><transition><source ref="sg_wait" /><target ref="sg_green" /><label kind="guard" x="-600" y="169">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-600" y="205">configure_scenario(SC_GREEN)</label><nail x="-330" y="240" /></transition><transition><source ref="sg_green" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="282">frame!</label><label kind="assignment" x="-310" y="300">frame_t = 0</label><nail x="-180" y="295" /><nail x="-500" y="295" /></transition><transition><source ref="sg_wait" /><target ref="sg_close_vehicle" /><label kind="guard" x="-440" y="329">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-440" y="365">configure_scenario(SC_CLOSE_VEHICLE)</label><nail x="-330" y="400" /></transition><transition><source ref="sg_close_vehicle" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="442">frame!</label><label kind="assignment" x="-310" y="460">frame_t = 0</label><nail x="-180" y="455" /><nail x="-500" y="455" /></transition><transition><source ref="sg_wait" /><target ref="sg_far_vehicle" /><label kind="guard" x="-600" y="489">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-600" y="525">configure_scenario(SC_FAR_VEHICLE)</label><nail x="-330" y="560" /></transition><transition><source ref="sg_far_vehicle" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="602">frame!</label><label kind="assignment" x="-310" y="620">frame_t = 0</label><nail x="-180" y="615" /><nail x="-500" y="615" /></transition><transition><source ref="sg_wait" /><target ref="sg_low_conf" /><label kind="guard" x="-440" y="649">frame_t &gt;= FRAME_PERIOD</label><label kind="assignment" x="-440" y="685">configure_scenario(SC_LOW_CONFIDENCE)</label><nail x="-330" y="720" /></transition><transition><source ref="sg_low_conf" /><target ref="sg_wait" /><label kind="synchronisation" x="-310" y="762">frame!</label><label kind="assignment" x="-310" y="780">frame_t = 0</label><nail x="-180" y="775" /><nail x="-500" y="775" /></transition></template><template><name>PerceptionAgent</name><declaration>clock cycle_t;
+bool object_ready = false;
+bool traffic_ready = false;</declaration><location id="pa_idle" x="-700" y="0"><name x="-725" y="-30">Idle</name></location><location id="pa_start_obj" x="-350" y="0"><name x="-375" y="-30">StartObjectRole</name><committed /></location><location id="pa_start_tl" x="0" y="0"><name x="-25" y="-30">StartTrafficRole</name><committed /></location><location id="pa_await" x="350" y="0"><name x="325" y="-30">AwaitRoleResults</name><label kind="invariant" x="320" y="15">cycle_t &lt;= PROCESS_MAX</label></location><location id="pa_publish" x="700" y="0"><name x="675" y="-30">PublishPerception</name><committed /></location><init ref="pa_idle" /><transition><source ref="pa_idle" /><target ref="pa_start_obj" /><label kind="synchronisation" x="-590" y="-88">frame?</label><label kind="assignment" x="-590" y="-70">cycle_t = 0, object_ready = false, traffic_ready = false, reset_perception()</label></transition><transition><source ref="pa_start_obj" /><target ref="pa_start_tl" /><label kind="synchronisation" x="-230" y="-63">start_object!</label></transition><transition><source ref="pa_start_tl" /><target ref="pa_await" /><label kind="synchronisation" x="120" y="-63">start_traffic!</label></transition><transition><source ref="pa_await" /><target ref="pa_await" /><label kind="synchronisation" x="270" y="-183">object_done?</label><label kind="assignment" x="270" y="-165">object_ready = true</label><nail x="250" y="-180" /><nail x="450" y="-180" /></transition><transition><source ref="pa_await" /><target ref="pa_await" /><label kind="synchronisation" x="270" y="157">traffic_done?</label><label kind="assignment" x="270" y="175">traffic_ready = true</label><nail x="250" y="180" /><nail x="450" y="180" /></transition><transition><source ref="pa_await" /><target ref="pa_publish" /><label kind="guard" x="455" y="-86">object_ready &amp;&amp; traffic_ready</label></transition><transition><source ref="pa_publish" /><target ref="pa_idle" /><label kind="synchronisation" x="-80" y="252">perception_ready!</label><nail x="700" y="280" /><nail x="-700" y="280" /></transition></template><template><name>ObjectDetectionRole</name><declaration>clock obj_t;</declaration><location id="or_wait" x="-650" y="0"><name x="-675" y="-30">Waiting</name></location><location id="or_process" x="-250" y="0"><name x="-275" y="-30">ProcessImage</name><label kind="invariant" x="-280" y="15">obj_t &lt;= PROCESS_MAX</label></location><location id="or_ped" x="450" y="-300"><name x="425" y="-330">PedestrianDetected</name><committed /></location><location id="or_vehicle" x="450" y="0"><name x="425" y="-30">VehicleDetected</name><committed /></location><location id="or_none" x="450" y="300"><name x="425" y="270">NoValidObject</name><committed /></location><init ref="or_wait" /><transition><source ref="or_wait" /><target ref="or_process" /><label kind="synchronisation" x="-520" y="-73">start_object?</label><label kind="assignment" x="-520" y="-55">obj_t = 0</label></transition><transition><source ref="or_process" /><target ref="or_ped" /><label kind="guard" x="-100" y="-316">obj_t &gt;= PROCESS_MIN &amp;&amp; valid_pedestrian()</label><label kind="assignment" x="-100" y="-280">pedestrian_valid = true, vehicle_valid = false</label><nail x="50" y="-300" /></transition><transition><source ref="or_process" /><target ref="or_vehicle" /><label kind="guard" x="-50" y="-91">obj_t &gt;= PROCESS_MIN &amp;&amp; valid_vehicle()</label><label kind="assignment" x="-50" y="-55">pedestrian_valid = false, vehicle_valid = true</label></transition><transition><source ref="or_process" /><target ref="or_none" /><label kind="guard" x="-100" y="234">obj_t &gt;= PROCESS_MIN &amp;&amp; !valid_pedestrian() &amp;&amp; !valid_vehicle()</label><label kind="assignment" x="-100" y="270">pedestrian_valid = false, vehicle_valid = false</label><nail x="50" y="300" /></transition><transition><source ref="or_ped" /><target ref="or_wait" /><label kind="synchronisation" x="-150" y="-443">object_done!</label><nail x="450" y="-430" /><nail x="-650" y="-430" /></transition><transition><source ref="or_vehicle" /><target ref="or_wait" /><label kind="synchronisation" x="-150" y="-113">object_done!</label><nail x="450" y="-100" /><nail x="-650" y="-100" /></transition><transition><source ref="or_none" /><target ref="or_wait" /><label kind="synchronisation" x="-150" y="407">object_done!</label><nail x="450" y="430" /><nail x="-650" y="430" /></transition></template><template><name>TrafficLightRole</name><declaration>clock tl_t;</declaration><location id="tr_wait" x="-700" y="0"><name x="-725" y="-30">Waiting</name></location><location id="tr_process" x="-300" y="0"><name x="-325" y="-30">ProcessImage</name><label kind="invariant" x="-330" y="15">tl_t &lt;= PROCESS_MAX</label></location><location id="tr_red" x="500" y="-450"><name x="475" y="-480">RedLightDetected</name><committed /></location><location id="tr_yellow" x="500" y="-150"><name x="475" y="-180">YellowLightDetected</name><committed /></location><location id="tr_green" x="500" y="150"><name x="475" y="120">GreenLightDetected</name><committed /></location><location id="tr_unknown" x="500" y="450"><name x="475" y="420">UnknownOrLowConfidence</name><committed /></location><init ref="tr_wait" /><transition><source ref="tr_wait" /><target ref="tr_process" /><label kind="synchronisation" x="-570" y="-73">start_traffic?</label><label kind="assignment" x="-570" y="-55">tl_t = 0</label></transition><transition><source ref="tr_process" /><target ref="tr_red" /><label kind="guard" x="-100" y="-461">tl_t &gt;= PROCESS_MIN &amp;&amp; valid_red_light()</label><label kind="assignment" x="-100" y="-425">traffic_state = TL_RED</label><nail x="50" y="-450" /></transition><transition><source ref="tr_process" /><target ref="tr_yellow" /><label kind="guard" x="-100" y="-161">tl_t &gt;= PROCESS_MIN &amp;&amp; valid_yellow_light()</label><label kind="assignment" x="-100" y="-125">traffic_state = TL_YELLOW</label><nail x="50" y="-150" /></transition><transition><source ref="tr_process" /><target ref="tr_green" /><label kind="guard" x="-100" y="139">tl_t &gt;= PROCESS_MIN &amp;&amp; valid_green_light()</label><label kind="assignment" x="-100" y="175">traffic_state = TL_GREEN</label><nail x="50" y="150" /></transition><transition><source ref="tr_process" /><target ref="tr_unknown" /><label kind="guard" x="-100" y="439">tl_t &gt;= PROCESS_MIN &amp;&amp; !valid_red_light() &amp;&amp; !valid_yellow_light() &amp;&amp; !valid_green_light()</label><label kind="assignment" x="-100" y="475">traffic_state = TL_UNKNOWN</label><nail x="50" y="450" /></transition><transition><source ref="tr_red" /><target ref="tr_wait" /><label kind="synchronisation" x="100" y="-578">traffic_done!</label><nail x="680" y="-450" /><nail x="680" y="-550" /><nail x="-700" y="-550" /></transition><transition><source ref="tr_yellow" /><target ref="tr_wait" /><label kind="synchronisation" x="100" y="-278">traffic_done!</label><nail x="680" y="-150" /><nail x="680" y="-250" /><nail x="-700" y="-250" /></transition><transition><source ref="tr_green" /><target ref="tr_wait" /><label kind="synchronisation" x="100" y="222">traffic_done!</label><nail x="680" y="150" /><nail x="680" y="250" /><nail x="-700" y="250" /></transition><transition><source ref="tr_unknown" /><target ref="tr_wait" /><label kind="synchronisation" x="100" y="522">traffic_done!</label><nail x="680" y="450" /><nail x="680" y="550" /><nail x="-700" y="550" /></transition></template><template><name>DecisionRole</name><declaration /><location id="dr_manual" x="700" y="600"><name x="675" y="570">ManualDriving</name></location><location id="dr_emergency" x="700" y="-500"><name x="675" y="-530">EmergencyBraking</name></location><location id="dr_controlled" x="700" y="-100"><name x="675" y="-130">ControlledBraking</name></location><location id="dr_notification" x="700" y="300"><name x="675" y="270">NotificationOnly</name></location><location id="dr_evaluate" x="-550" y="0"><name x="-575" y="-30">EvaluateRisk</name><committed /></location><location id="dr_issue_emergency" x="0" y="-600"><name x="-25" y="-630">IssueEmergency</name><committed /></location><location id="dr_issue_red_fast" x="0" y="-400"><name x="-25" y="-430">IssueRedFast</name><committed /></location><location id="dr_issue_red_slow" x="0" y="-200"><name x="-25" y="-230">IssueRedSlow</name><committed /></location><location id="dr_issue_yellow" x="0" y="0"><name x="-25" y="-30">IssueYellow</name><committed /></location><location id="dr_issue_vehicle" x="0" y="200"><name x="-25" y="170">IssueVehicle</name><committed /></location><location id="dr_issue_notification" x="0" y="400"><name x="-25" y="370">IssueNotification</name><committed /></location><location id="dr_issue_manual" x="0" y="600"><name x="-25" y="570">IssueManual</name><committed /></location><init ref="dr_manual" /><transition><source ref="dr_manual" /><target ref="dr_evaluate" /><label kind="synchronisation" x="80" y="-788">perception_ready?</label><nail x="880" y="600" /><nail x="880" y="-760" /><nail x="-550" y="-760" /></transition><transition><source ref="dr_emergency" /><target ref="dr_evaluate" /><label kind="synchronisation" x="80" y="-878">perception_ready?</label><nail x="880" y="-500" /><nail x="880" y="-850" /><nail x="-550" y="-850" /></transition><transition><source ref="dr_controlled" /><target ref="dr_evaluate" /><label kind="synchronisation" x="80" y="-968">perception_ready?</label><nail x="880" y="-100" /><nail x="880" y="-940" /><nail x="-550" y="-940" /></transition><transition><source ref="dr_notification" /><target ref="dr_evaluate" /><label kind="synchronisation" x="80" y="-1058">perception_ready?</label><nail x="880" y="300" /><nail x="880" y="-1030" /><nail x="-550" y="-1030" /></transition><transition><source ref="dr_evaluate" /><target ref="dr_issue_emergency" /><label kind="guard" x="-450" y="-661">need_emergency()</label><nail x="-280" y="-600" /></transition><transition><source ref="dr_evaluate" /><target ref="dr_issue_red_fast" /><label kind="guard" x="-450" y="-461">need_red_brake() &amp;&amp; speed_kmh &gt; 15</label><label kind="assignment" x="-450" y="-425">requested_brake = 90</label><nail x="-280" y="-400" /></transition><transition><source ref="dr_evaluate" /><target ref="dr_issue_red_slow" /><label kind="guard" x="-450" y="-261">need_red_brake() &amp;&amp; speed_kmh &lt;= 15</label><label kind="assignment" x="-450" y="-225">requested_brake = 60</label><nail x="-280" y="-200" /></transition><transition><source ref="dr_evaluate" /><target ref="dr_issue_yellow" /><label kind="guard" x="-450" y="-61">need_yellow_brake()</label><label kind="assignment" x="-450" y="-25">requested_brake = 45</label><nail x="-280" y="0" /></transition><transition><source ref="dr_evaluate" /><target ref="dr_issue_vehicle" /><label kind="guard" x="-450" y="139">need_vehicle_brake()</label><label kind="assignment" x="-450" y="175">requested_brake = 35</label><nail x="-280" y="200" /></transition><transition><source ref="dr_evaluate" /><target ref="dr_issue_notification" /><label kind="guard" x="-450" y="339">need_notification()</label><nail x="-280" y="400" /></transition><transition><source ref="dr_evaluate" /><target ref="dr_issue_manual" /><label kind="guard" x="-450" y="539">need_manual()</label><nail x="-280" y="600" /></transition><transition><source ref="dr_issue_emergency" /><target ref="dr_emergency" /><label kind="synchronisation" x="280" y="-608">emergency_cmd!</label><label kind="assignment" x="280" y="-590">apply_emergency()</label></transition><transition><source ref="dr_issue_red_fast" /><target ref="dr_controlled" /><label kind="synchronisation" x="300" y="-438">controlled_cmd!</label><label kind="assignment" x="300" y="-420">apply_controlled()</label><nail x="350" y="-400" /><nail x="350" y="-100" /></transition><transition><source ref="dr_issue_red_slow" /><target ref="dr_controlled" /><label kind="synchronisation" x="370" y="-238">controlled_cmd!</label><label kind="assignment" x="370" y="-220">apply_controlled()</label><nail x="420" y="-200" /><nail x="420" y="-100" /></transition><transition><source ref="dr_issue_yellow" /><target ref="dr_controlled" /><label kind="synchronisation" x="440" y="-38">controlled_cmd!</label><label kind="assignment" x="440" y="-20">apply_controlled()</label><nail x="490" y="0" /><nail x="490" y="-100" /></transition><transition><source ref="dr_issue_vehicle" /><target ref="dr_controlled" /><label kind="synchronisation" x="510" y="162">controlled_cmd!</label><label kind="assignment" x="510" y="180">apply_controlled()</label><nail x="560" y="200" /><nail x="560" y="-100" /></transition><transition><source ref="dr_issue_notification" /><target ref="dr_notification" /><label kind="synchronisation" x="280" y="342">notification_cmd!</label><label kind="assignment" x="280" y="360">apply_notification()</label></transition><transition><source ref="dr_issue_manual" /><target ref="dr_manual" /><label kind="synchronisation" x="280" y="532">manual_cmd!</label><label kind="assignment" x="280" y="550">apply_manual()</label></transition></template><template><name>ControlAgent</name><declaration /><location id="ca_standby" x="-500" y="0"><name x="-525" y="-30">StandbyHumanControl</name></location><location id="ca_emergency" x="350" y="-350"><name x="325" y="-380">EmergencyOverride</name><committed /></location><location id="ca_controlled" x="350" y="0"><name x="325" y="-30">ControlledOverride</name><committed /></location><location id="ca_notify" x="350" y="350"><name x="325" y="320">DriverNotification</name><committed /></location><init ref="ca_standby" /><transition><source ref="ca_standby" /><target ref="ca_emergency" /><label kind="synchronisation" x="-100" y="-248">emergency_cmd?</label></transition><transition><source ref="ca_standby" /><target ref="ca_controlled" /><label kind="synchronisation" x="-100" y="-63">controlled_cmd?</label></transition><transition><source ref="ca_standby" /><target ref="ca_notify" /><label kind="synchronisation" x="-100" y="202">notification_cmd?</label></transition><transition><source ref="ca_standby" /><target ref="ca_standby" /><label kind="synchronisation" x="-570" y="-133">manual_cmd?</label><nail x="-650" y="-120" /><nail x="-350" y="-120" /></transition><transition><source ref="ca_emergency" /><target ref="ca_standby" /><nail x="550" y="-350" /><nail x="550" y="550" /><nail x="-500" y="550" /></transition><transition><source ref="ca_controlled" /><target ref="ca_standby" /><nail x="550" y="0" /><nail x="550" y="550" /><nail x="-500" y="550" /></transition><transition><source ref="ca_notify" /><target ref="ca_standby" /><nail x="550" y="350" /><nail x="550" y="550" /><nail x="-500" y="550" /></transition></template><template><name>ResponseMonitor</name><declaration>clock response_t;</declaration><location id="rm_idle" x="-550" y="0"><name x="-575" y="-30">Idle</name></location><location id="rm_emergency" x="450" y="-400"><name x="425" y="-430">AwaitEmergency</name><label kind="invariant" x="420" y="-385">response_t &lt;= RESPONSE_DEADLINE</label></location><location id="rm_controlled" x="450" y="0"><name x="425" y="-30">AwaitControlled</name><label kind="invariant" x="420" y="15">response_t &lt;= RESPONSE_DEADLINE</label></location><location id="rm_notification" x="450" y="400"><name x="425" y="370">AwaitNotification</name><label kind="invariant" x="420" y="415">response_t &lt;= RESPONSE_DEADLINE</label></location><init ref="rm_idle" /><transition><source ref="rm_idle" /><target ref="rm_emergency" /><label kind="guard" x="-350" y="-396">need_emergency()</label><label kind="synchronisation" x="-350" y="-378">perception_ready?</label><label kind="assignment" x="-350" y="-360">response_t = 0</label><nail x="-50" y="-400" /></transition><transition><source ref="rm_idle" /><target ref="rm_controlled" /><label kind="guard" x="-200" y="-91">need_controlled()</label><label kind="synchronisation" x="-200" y="-73">perception_ready?</label><label kind="assignment" x="-200" y="-55">response_t = 0</label></transition><transition><source ref="rm_idle" /><target ref="rm_notification" /><label kind="guard" x="-350" y="324">need_notification()</label><label kind="synchronisation" x="-350" y="342">perception_ready?</label><label kind="assignment" x="-350" y="360">response_t = 0</label><nail x="-50" y="400" /></transition><transition><source ref="rm_idle" /><target ref="rm_idle" /><label kind="guard" x="-630" y="-201">need_manual()</label><label kind="synchronisation" x="-630" y="-183">perception_ready?</label><nail x="-700" y="-170" /><nail x="-400" y="-170" /></transition><transition><source ref="rm_emergency" /><target ref="rm_idle" /><label kind="synchronisation" x="-50" y="-563">emergency_cmd?</label><nail x="600" y="-400" /><nail x="600" y="-550" /><nail x="-550" y="-550" /></transition><transition><source ref="rm_controlled" /><target ref="rm_idle" /><label kind="synchronisation" x="-50" y="-133">controlled_cmd?</label><nail x="450" y="-120" /><nail x="-550" y="-120" /></transition><transition><source ref="rm_notification" /><target ref="rm_idle" /><label kind="synchronisation" x="-50" y="527">notification_cmd?</label><nail x="600" y="400" /><nail x="600" y="550" /><nail x="-550" y="550" /></transition></template><system>generator = ScenarioGenerator();
+perception = PerceptionAgent();
+object_role = ObjectDetectionRole();
+traffic_role = TrafficLightRole();
+decision = DecisionRole();
+control_agent = ControlAgent();
+monitor = ResponseMonitor();
+
+system generator, perception, object_role, traffic_role, decision, control_agent, monitor;</system><queries><query><formula>A[] not deadlock</formula><comment>The complete composed ADAS model is deadlock-free.</comment></query><query><formula>A[] (brake &gt; 0 imply throttle == 0)</formula><comment>Safety: throttle and brake are never active simultaneously.</comment></query><query><formula>A[] (control_agent.EmergencyOverride imply brake == 100 &amp;&amp; throttle == 0)</formula><comment>Emergency override always applies full brake and zero throttle.</comment></query><query><formula>A[] (control_agent.ControlledOverride imply brake &gt; 0 &amp;&amp; brake &lt; 100 &amp;&amp; throttle == 0)</formula><comment>Controlled interventions use partial braking and zero throttle.</comment></query><query><formula>A[] (decision.ManualDriving imply brake == 0 &amp;&amp; throttle == 0)</formula><comment>Manual-driving mode does not command the vehicle.</comment></query><query><formula>A[] (decision.NotificationOnly imply brake == 0 &amp;&amp; throttle == 0)</formula><comment>Green-light notification never takes control.</comment></query><query><formula>object_role.PedestrianDetected --&gt; control_agent.EmergencyOverride</formula><comment>A valid pedestrian detection always leads to emergency braking.</comment></query><query><formula>traffic_role.RedLightDetected --&gt; control_agent.ControlledOverride</formula><comment>A valid red-light detection always leads to controlled braking.</comment></query><query><formula>traffic_role.GreenLightDetected --&gt; decision.NotificationOnly</formula><comment>A valid green-light detection leads to notification-only behavior.</comment></query><query><formula>A[] (monitor.AwaitEmergency imply monitor.response_t &lt;= RESPONSE_DEADLINE)</formula><comment>Emergency commands are issued within the configured response deadline.</comment></query><query><formula>A[] (monitor.AwaitControlled imply monitor.response_t &lt;= RESPONSE_DEADLINE)</formula><comment>Controlled-braking commands are issued within the configured response deadline.</comment></query><query><formula>A[] (monitor.AwaitNotification imply monitor.response_t &lt;= RESPONSE_DEADLINE)</formula><comment>Notification-only commands are issued within the configured response deadline.</comment></query><query><formula>A[] (command_scenario == SC_RED_FAST &amp;&amp; control_agent.ControlledOverride imply brake == 90)</formula><comment>A red light above 15 km/h applies the code-derived 0.90 brake command.</comment></query><query><formula>A[] (command_scenario == SC_RED_SLOW &amp;&amp; control_agent.ControlledOverride imply brake == 60)</formula><comment>A red light at or below 15 km/h applies the code-derived 0.60 brake command.</comment></query><query><formula>A[] (command_scenario == SC_YELLOW_FAST &amp;&amp; control_agent.ControlledOverride imply brake == 45)</formula><comment>A yellow light above 10 km/h applies the code-derived 0.45 brake command.</comment></query><query><formula>A[] (command_scenario == SC_CLOSE_VEHICLE &amp;&amp; control_agent.ControlledOverride imply brake == 35)</formula><comment>A close vehicle above 20 km/h applies the code-derived 0.35 brake command.</comment></query><query><formula>A[] (command_scenario == SC_LOW_CONFIDENCE imply control_agent.StandbyHumanControl &amp;&amp; brake == 0 &amp;&amp; throttle == 0)</formula><comment>Low-confidence perception does not cause an intervention.</comment></query><query><formula>E&lt;&gt; control_agent.EmergencyOverride</formula><comment>Emergency-braking behavior is reachable.</comment></query><query><formula>E&lt;&gt; control_agent.ControlledOverride</formula><comment>Controlled-braking behavior is reachable.</comment></query><query><formula>E&lt;&gt; decision.NotificationOnly</formula><comment>Green notification-only behavior is reachable.</comment></query></queries></nta>

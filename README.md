@@ -48,6 +48,45 @@ requirements.txt
 
 ---
 
+## Task 3 MUML and UPPAAL Verification
+
+The repository also includes the Task 3 software modeling and formal verification artifacts in `task3_upaal/`.
+
+This part models the ADAS logic as timed automata for:
+
+- Scenario generation
+- Perception coordination
+- Object detection
+- Traffic light detection
+- Risk decision logic
+- Control override behavior
+- Response-time monitoring
+
+The UPPAAL model verifies the expected safety behavior of the implemented ADAS logic, including deadlock freedom, no simultaneous throttle and brake, correct emergency braking for pedestrians, controlled braking for red/yellow/close-vehicle cases, notification-only behavior for green traffic lights, and bounded response time.
+
+The main Task 3 files are:
+
+```text
+task3_upaal/
+|-- Carla_ADAS_Task3_UPPAAL.xml
+|-- Carla_ADAS_Task3_Verifier_Queries.q
+|-- TASK3_MUML_UPPAAL_REPORT.md
+|-- TASK3_MUML_DIAGRAMS.md
+|-- FORMAL_VERIFICATION_RESULTS.md
+|-- VALIDATION_NOTES.md
+|-- FINAL_ACCEPTABILITY_AUDIT.md
+|-- UPPAAL_IMPORT_AND_VERIFY.md
+|-- TASK3_SUBMISSION_CHECKLIST.md
+|-- verifyta_results.txt
+`-- evidence/
+    |-- UPPAAL_Verifier_Results_01.png
+    `-- UPPAAL_Verifier_Results_02.png
+```
+
+All 20 verifier properties listed in `Carla_ADAS_Task3_Verifier_Queries.q` are satisfied in the final model.
+
+---
+
 ## Repository Structure
 
 ```text
